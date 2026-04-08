@@ -1,0 +1,217 @@
+# rehome — example network configuration (IR v1)
+#
+# This file is the intermediate representation a `rehome export` command
+# produces. You can hand-edit it, commit it to git, diff it, and feed it
+# to `rehome import --to <any-supported-vendor>`.
+#
+# This example shows a moderately complex home network with:
+#   - three VLANs (main, IoT, guest)
+#   - two Wi-Fi SSIDs (main + IoT, plus a guest SSID)
+#   - DHCP reservations for key devices
+#   - custom local DNS
+#   - a static route to a Tailscale subnet router
+#   - QoS priority for latency-sensitive hosts
+#   - firewall rules that isolate the IoT VLAN
+#
+# Every field is documented. Fields with vendor-specific semantics
+# (e.g. QoS priority values) are normalized to rehome's own enum and
+# translated per-adapter.
+
+version: 1
+
+metadata:
+  name: example-home-network
+  description: >
+    Three-VLAN home network with isolated IoT segment and QoS priority
+    for latency-sensitive devices. Used as a reference for the rehome IR.
+  captured_from: example
+  captured_at: "2026-01-01T00:00:00Z"
+
+# ---------------------------------------------------------------------------
+# WAN — the uplink to the internet
+# ---------------------------------------------------------------------------
+wan:
+  mode: dhcp                     # "dhcp", "pppoe", or "static"
+  mtu: 1500
+  # For pppoe you'd set: { mode: pppoe, username: ..., password: ... }
+  # For static you'd set: { mode: static, ip: ..., mask: ..., gateway: ..., dns: [...] }
+
+# ---------------------------------------------------------------------------
+# Networks — LANs, VLANs, each with their own DHCP service
+# ---------------------------------------------------------------------------
+networks:
+  - name: Default
+    purpose: corporate            # "corporate" (normal LAN) or "guest"
+    subnet: 192.168.10.1/24       # gateway IP + CIDR
+    vlan: null                    # null = untagged / native VLAN
+    domain: lan
+    dhcp:
+      enabled: true
+      start: 192.168.10.100
+      end:   192.168.10.199
+      lease_seconds: 86400
+      dns_servers: []             # empty = use the router as DNS
+
+  - name: IoT
+    purpose: corporate
+    subnet: 192.168.20.1/24
+    vlan: 20
+    domain: iot.lan
+    isolated_from:                # firewall rules auto-generated
+      - Default
+      - Guest
+    dhcp:
+      enabled: true
+      start: 192.168.20.100
+      end:   192.168.20.199
+      lease_seconds: 86400
+      dns_servers: []
+
+  - name: Guest
+    purpose: guest                # enables vendor "guest network" features
+    subnet: 192.168.30.1/24
+    vlan: 30
+    domain: guest.lan
+    isolated_from:
+      - Default
+      - IoT
+    dhcp:
+      enabled: true
+      start: 192.168.30.100
+      end:   192.168.30.199
+      lease_seconds: 3600
+
+# ---------------------------------------------------------------------------
+# Wi-Fi SSIDs — each bound to a network above
+# ---------------------------------------------------------------------------
+wifi:
+  - ssid: ExampleMain
+    network: Default              # matches networks[*].name
+    security: wpa2-wpa3-transition   # wpa2, wpa3, wpa2-wpa3-transition, open
+    psk: "replace-me-with-a-strong-passphrase"
+    bands: [2.4, 5]               # 2.4 GHz + 5 GHz. Add 6 on WPA3-only SSIDs.
+    hidden: false
+    pmf: optional                 # required for WPA3-only, optional for transition
+
+  - ssid: ExampleMain-6G
+    network: Default              # same VLAN as main, just 6 GHz WPA3-only
+    security: wpa3
+    psk: "replace-me-with-a-strong-passphrase"
+    bands: [6]
+    hidden: false
+    pmf: required
+
+  - ssid: ExampleIoT
+    network: IoT
+    security: wpa2                # many IoT devices don't speak WPA3
+    psk: "replace-me-too"
+    bands: [2.4]                  # most IoT is 2.4-only
+    hidden: false
+    pmf: disabled
+
+  - ssid: ExampleGuest
+    network: Guest
+    security: wpa2-wpa3-transition
+    psk: "replace-me-too"
+    bands: [2.4, 5]
+    hidden: false
+    pmf: optional
+    client_isolation: true        # guests can't see each other
+
+# ---------------------------------------------------------------------------
+# DHCP reservations — MAC → fixed IP mappings
+# ---------------------------------------------------------------------------
+dhcp_reservations:
+  - mac: "00:11:22:33:44:55"
+    ip:  192.168.10.10
+    hostname: nas
+    network: Default
+
+  - mac: "00:11:22:33:44:56"
+    ip:  192.168.10.20
+    hostname: printer
+    network: Default
+
+  - mac: "00:11:22:33:44:57"
+    ip:  192.168.20.50
+    hostname: smart-thermostat
+    network: IoT
+
+# ---------------------------------------------------------------------------
+# Custom DNS A records — local .lan hostnames
+# ---------------------------------------------------------------------------
+dns_records:
+  - host: nas.lan
+    ip:   192.168.10.10
+    type: A
+  - host: printer.lan
+    ip:   192.168.10.20
+    type: A
+  - host: router.lan
+    ip:   192.168.10.1
+    type: A
+
+# ---------------------------------------------------------------------------
+# Static routes
+# ---------------------------------------------------------------------------
+routes:
+  - name: "VPN subnet via VPN gateway"
+    dest: 10.100.0.0/16
+    via:  192.168.10.5            # the VPN gateway device
+    description: >
+      Route traffic for the remote office subnet through the local
+      VPN appliance so LAN clients can reach it without their own
+      VPN clients.
+
+# ---------------------------------------------------------------------------
+# Port forwards — inbound WAN → LAN NAT
+# ---------------------------------------------------------------------------
+port_forwards:
+  # Example (commented out — most home networks should NOT expose anything):
+  # - name: "SSH to jumpbox"
+  #   protocol: tcp
+  #   wan_port: 22222
+  #   lan_ip: 192.168.10.15
+  #   lan_port: 22
+  #   enabled: true
+  #   description: "Reach the internal jumpbox from outside"
+
+# ---------------------------------------------------------------------------
+# Firewall rules — declarative, chain-ordered
+# ---------------------------------------------------------------------------
+firewall:
+  # Auto-generated rules from `networks[*].isolated_from` already cover
+  # IoT ↔ Default / Guest blocks. Add custom rules here for special cases.
+  #
+  # Example (commented out):
+  # - name: "Block printer from internet"
+  #   chain: wan_out
+  #   src_ip: 192.168.10.20
+  #   action: drop
+  #   description: "The printer keeps phoning home; no need for it to."
+
+# ---------------------------------------------------------------------------
+# QoS — traffic priority for latency-sensitive hosts
+# ---------------------------------------------------------------------------
+qos:
+  - label: "Video calls"
+    ips: [192.168.10.42]
+    priority: high                # low, normal, high, critical
+    description: "Work laptop — needs stable latency during calls."
+
+  - label: "Game console"
+    ips: [192.168.10.55]
+    priority: high
+    description: "Console gaming — prioritize over bulk downloads."
+
+# ---------------------------------------------------------------------------
+# Vendor-specific escape hatches (ignored by adapters that don't recognize them)
+# ---------------------------------------------------------------------------
+vendor_specific:
+  # unifi:
+  #   smart_queues_upload_kbps: 900000
+  #   smart_queues_download_kbps: 900000
+  # asus_merlin:
+  #   jffs_scripts:
+  #     firewall_start: |
+  #       # raw script content here
