@@ -4,7 +4,7 @@
 
 Network migration as code — capture your router config once, version it, diff it, apply it anywhere. Cross-vendor. Scriptable. Safe.
 
-> **Status: pre-alpha.** Architecture in progress. First target pair: **Asus Merlin → UniFi OS**. More vendors after v0.1 ships. Not yet usable — ⭐ the repo to follow along.
+> **Status: pre-alpha.** Architecture in progress. First target pair: **Asus Merlin → UniFi OS** — proven end-to-end on 2026-04-09 via a one-off seed script (Asus BE82U → UniFi Dream Router 7, UniFi Network 10.0.162). Adapter code lands next, seeded by the schema notes in [`docs/vendor-notes/unifi-os.md`](docs/vendor-notes/unifi-os.md). Not yet usable as a CLI — ⭐ the repo to follow along.
 
 ---
 
